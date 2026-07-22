@@ -1202,6 +1202,22 @@ class Config:
     def _do_configure(self) -> None:
         assert not self._configured
         self._configured = True
+        if self.pluginmanager.hasplugin("warnings"):
+            with contextlib.ExitStack() as stack:
+                # Apply filters before any pytest_configure hooks run and keep
+                # them active until after pytest_unconfigure. Phase-specific
+                # warning contexts are responsible for recording warnings.
+                stack.enter_context(warnings.catch_warnings())
+                if not sys.warnoptions:
+                    warnings.filterwarnings("always", category=DeprecationWarning)
+                    warnings.filterwarnings(
+                        "always", category=PendingDeprecationWarning
+                    )
+                apply_warning_filters(
+                    self.getini("filterwarnings"),
+                    self.known_args_namespace.pythonwarnings or [],
+                )
+                self.add_cleanup(stack.pop_all().close)
         self.hook.pytest_configure.call_historic(kwargs=dict(config=self))
 
     def _ensure_unconfigure(self) -> None:

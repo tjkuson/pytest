@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager
-from contextlib import ExitStack
 import sys
 from typing import Literal
 import warnings
@@ -130,23 +129,8 @@ def pytest_load_initial_conftests(
 
 
 def pytest_configure(config: Config) -> None:
-    with ExitStack() as stack:
-        stack.enter_context(
-            catch_warnings_for_item(
-                config=config,
-                ihook=config.hook,
-                when="config",
-                item=None,
-                # this disables recording because the terminalreporter has
-                # finished by the time it comes to reporting logged warnings
-                # from the end of config cleanup. So for now, this is only
-                # useful for setting a warning filter with an 'error' action.
-                record=False,
-            )
-        )
-        config.addinivalue_line(
-            "markers",
-            "filterwarnings(warning): add a warning filter to the given test. "
-            "see https://docs.pytest.org/en/stable/how-to/capture-warnings.html#pytest-mark-filterwarnings ",
-        )
-        config.add_cleanup(stack.pop_all().close)
+    config.addinivalue_line(
+        "markers",
+        "filterwarnings(warning): add a warning filter to the given test. "
+        "see https://docs.pytest.org/en/stable/how-to/capture-warnings.html#pytest-mark-filterwarnings ",
+    )
