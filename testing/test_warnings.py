@@ -1,8 +1,10 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
+import importlib.metadata
 import os
 import sys
+import types
 import warnings
 
 from _pytest.config import ExitCode
@@ -731,6 +733,150 @@ def test_pytest_configure_warning_filter(pytester: Pytester, tryfirst: bool) -> 
     result.assert_outcomes(passed=1)
     result.stdout.no_fnmatch_line("*from pytest_configure*")
     result.stderr.no_fnmatch_line("*from pytest_configure*")
+
+
+def _make_plugin_with_import_warning(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        warning_plugin="""
+            import warnings
+
+            warnings.warn("from plugin import", DeprecationWarning)
+        """,
+        test_it="def test_it(): pass",
+    )
+
+
+def test_plugin_import_warning(pytester: Pytester) -> None:
+    """Issue 12697."""
+    _make_plugin_with_import_warning(pytester)
+    pytester.plugins = ["warning_plugin"]
+
+    result = pytester.runpytest_subprocess()
+
+    result.assert_outcomes(passed=1, warnings=1)
+    result.stdout.fnmatch_lines("*DeprecationWarning: from plugin import")
+
+
+def test_plugin_import_warning_filter(
+    pytester: Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytester.makeini(
+        """
+        [pytest]
+        filterwarnings =
+            ignore::DeprecationWarning
+        """
+    )
+    _make_plugin_with_import_warning(pytester)
+    monkeypatch.setenv("PYTEST_PLUGINS", "warning_plugin")
+
+    result = pytester.runpytest_subprocess()
+
+    result.assert_outcomes(passed=1)
+    result.stdout.no_fnmatch_line("*from plugin import*")
+    result.stderr.no_fnmatch_line("*from plugin import*")
+
+
+def test_plugin_import_warning_without_warnings_plugin(pytester: Pytester) -> None:
+    pytester.makeini(
+        """
+        [pytest]
+        filterwarnings =
+            error::DeprecationWarning
+        """
+    )
+    _make_plugin_with_import_warning(pytester)
+    pytester.plugins = ["warning_plugin"]
+
+    result = pytester.runpytest_subprocess("-p", "no:warnings")
+
+    result.assert_outcomes(passed=1)
+    result.stdout.no_fnmatch_line("*from plugin import*")
+    result.stderr.no_fnmatch_line("*from plugin import*")
+
+
+def test_plugin_import_warning_without_warnings_plugin_from_addopts(
+    pytester: Pytester,
+) -> None:
+    pytester.makeini(
+        """
+        [pytest]
+        addopts = -p no:warnings
+        filterwarnings =
+            error::DeprecationWarning
+        """
+    )
+    _make_plugin_with_import_warning(pytester)
+    pytester.plugins = ["warning_plugin"]
+
+    result = pytester.runpytest_subprocess()
+
+    result.assert_outcomes(passed=1)
+    result.stdout.no_fnmatch_line("*from plugin import*")
+    result.stderr.no_fnmatch_line("*from plugin import*")
+
+
+def test_plugin_import_warning_with_warnings_plugin_reenabled(
+    pytester: Pytester,
+) -> None:
+    _make_plugin_with_import_warning(pytester)
+
+    result = pytester.runpytest_subprocess(
+        "-p", "no:warnings", "-p", "warnings", "-p", "warning_plugin"
+    )
+
+    # Exactly one warning: re-enabling must not cause a stray
+    # PytestAssertRewriteWarning from re-importing the warnings plugin.
+    result.assert_outcomes(passed=1, warnings=1)
+    result.stdout.fnmatch_lines("*DeprecationWarning: from plugin import")
+
+
+def test_plugin_import_warning_with_warnings_plugin_reenabled_from_addopts(
+    pytester: Pytester,
+) -> None:
+    pytester.makeini(
+        """
+        [pytest]
+        addopts = -p no:warnings
+        """
+    )
+    _make_plugin_with_import_warning(pytester)
+
+    result = pytester.runpytest_subprocess("-p", "warnings", "-p", "warning_plugin")
+
+    # Two warnings: the plugin's import warning, plus a pre-existing wart
+    # (present before warning capture was introduced): re-enabling a default
+    # plugin blocked via addopts re-imports it after get_config already
+    # imported it, emitting a PytestAssertRewriteWarning.
+    result.assert_outcomes(passed=1, warnings=2)
+    result.stdout.fnmatch_lines("*DeprecationWarning: from plugin import")
+
+
+def test_plugin_import_warning_entry_point(
+    pytester: Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class EntryPoint:
+        name = "warning-plugin"
+        group = "pytest11"
+
+        def load(self) -> types.ModuleType:
+            warnings.warn("from entry point import", DeprecationWarning)
+            return types.ModuleType("warning_plugin")
+
+    class Distribution:
+        entry_points = (EntryPoint(),)
+        files: tuple[()] = ()
+        metadata = {"name": "warning-plugin"}
+        version = "1.0"
+
+    monkeypatch.setattr(importlib.metadata, "distributions", lambda: (Distribution(),))
+    monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
+    pytester.makepyfile("def test_it(): pass")
+
+    result = pytester.runpytest_inprocess()
+
+    result.assert_outcomes(passed=1, warnings=1)
+    result.stdout.fnmatch_lines("*DeprecationWarning: from entry point import")
 
 
 class TestStackLevel:

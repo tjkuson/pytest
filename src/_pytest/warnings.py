@@ -21,8 +21,6 @@ def catch_warnings_for_item(
     ihook,
     when: Literal["config", "collect", "runtest"],
     item: Item | None,
-    *,
-    record: bool = True,
 ) -> Generator[None]:
     """Context manager that catches warnings generated in the contained execution block.
 
@@ -30,30 +28,15 @@ def catch_warnings_for_item(
 
     Each warning captured triggers the ``pytest_warning_recorded`` hook.
     """
-    with config._catch_configured_warnings(record=record) as log:
+    nodeid = "" if item is None else item.nodeid
+    with config._catch_and_record_warnings(ihook, when=when, nodeid=nodeid):
         # apply filters from "filterwarnings" marks
-        nodeid = "" if item is None else item.nodeid
         if item is not None:
             for mark in item.iter_markers(name="filterwarnings"):
                 for arg in mark.args:
                     warnings.filterwarnings(*parse_warning_filter(arg, escape=False))
 
-        try:
-            yield
-        finally:
-            if record:
-                # mypy can't infer that record=True means log is not None; help it.
-                assert log is not None
-
-                for warning_message in log:
-                    ihook.pytest_warning_recorded.call_historic(
-                        kwargs=dict(
-                            warning_message=warning_message,
-                            nodeid=nodeid,
-                            when=when,
-                            location=None,
-                        )
-                    )
+        yield
 
 
 def warning_record_to_str(warning_message: warnings.WarningMessage) -> str:

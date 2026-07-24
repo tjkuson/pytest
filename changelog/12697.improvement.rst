@@ -1,0 +1,3 @@
+Warnings emitted while importing plugins -- via :option:`-p`, the :envvar:`PYTEST_PLUGINS` environment variable, or entry point autoloading -- are now captured and filtered like other warnings: :option:`-W` and :confval:`filterwarnings` apply to them, and unsuppressed warnings appear in the warnings summary instead of being handled by Python's default warning machinery (which silently discards ``DeprecationWarning``).
+
+As a consequence, an ``error`` filter matching such a warning now aborts pytest at startup, and warning filters installed at plugin import time via :func:`warnings.filterwarnings` no longer persist for the rest of the run, matching the existing behavior for ``conftest.py`` imports. Passing ``-p no:warnings`` restores the previous behavior.

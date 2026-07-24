@@ -35,12 +35,14 @@ from typing import cast
 from typing import Final
 from typing import final
 from typing import IO
+from typing import Literal
 from typing import TextIO
 from typing import TYPE_CHECKING
 import warnings
 
 from pluggy import HookimplMarker
 from pluggy import HookimplOpts
+from pluggy import HookRelay
 from pluggy import HookspecMarker
 from pluggy import HookspecOpts
 from pluggy import PluginManager
@@ -1257,6 +1259,51 @@ class Config:
             apply_warning_filters(config_filters, cmdline_filters)
             yield log
 
+    @contextlib.contextmanager
+    def _catch_and_record_warnings(
+        self,
+        ihook: HookRelay,
+        when: Literal["config", "collect", "runtest"],
+        nodeid: str = "",
+    ) -> Generator[None]:
+        """Catch warnings with configured filters applied and report each
+        captured warning to the ``pytest_warning_recorded`` hook.
+
+        Defined here instead of _pytest.warnings for the same reason as
+        ``_catch_configured_warnings``.
+        """
+        with self._catch_configured_warnings(record=True) as records:
+            # mypy can't infer that record=True means records is not None; help it.
+            assert records is not None
+            try:
+                yield
+            finally:
+                for warning_message in records:
+                    ihook.pytest_warning_recorded.call_historic(
+                        kwargs=dict(
+                            warning_message=warning_message,
+                            nodeid=nodeid,
+                            when=when,
+                            location=None,
+                        )
+                    )
+
+    @contextlib.contextmanager
+    def _capture_plugin_import_warnings(self) -> Generator[None]:
+        """Capture warnings emitted while importing initial third-party plugins.
+
+        These imports happen before the warnings plugin's hook wrappers can
+        run. Requires the ``-p`` enable/disable state to have been resolved
+        already (`PytestPluginManager._consider_preparse_state`) so that
+        ``-p no:warnings`` is honored.
+        """
+        if self.pluginmanager.is_blocked("warnings"):
+            yield
+            return
+
+        with self._catch_and_record_warnings(self.hook, when="config"):
+            yield
+
     def _do_configure(self) -> None:
         assert not self._configured
         self._configured = True
@@ -1639,17 +1686,22 @@ class Config:
         self._checkversion()
         self._consider_importhook()
         self._configure_python_path()
-        self.pluginmanager.consider_preparse(args, exclude_only=False)
-        if (
-            not os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD")
-            and not self.known_args_namespace.disable_plugin_autoload
-        ):
-            # Autoloading from distribution package entry point has
-            # not been disabled.
-            self.pluginmanager.load_setuptools_entrypoints("pytest11")
-        # Otherwise only plugins explicitly specified in PYTEST_PLUGINS
-        # are going to be loaded.
-        self.pluginmanager.consider_env()
+        # Resolve the -p enable/disable state before importing any plugins,
+        # so that the capture decision below sees the final state of the
+        # warnings plugin.
+        plugin_imports = self.pluginmanager._consider_preparse_state(args)
+        with self._capture_plugin_import_warnings():
+            self.pluginmanager._consider_preparse_imports(plugin_imports)
+            if (
+                not os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD")
+                and not self.known_args_namespace.disable_plugin_autoload
+            ):
+                # Autoloading from distribution package entry point has
+                # not been disabled.
+                self.pluginmanager.load_setuptools_entrypoints("pytest11")
+            # Otherwise only plugins explicitly specified in PYTEST_PLUGINS
+            # are going to be loaded.
+            self.pluginmanager.consider_env()
 
         # Parse again, now including options added in pytest_addoption
         # by third-party plugins loaded above. This way they're available
