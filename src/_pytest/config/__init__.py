@@ -813,6 +813,25 @@ class PytestPluginManager(PluginManager):
         self, args: Sequence[str], *, exclude_only: bool = False
     ) -> None:
         """:meta private:"""
+        plugin_imports = self._consider_preparse_state(args, exclude_only=exclude_only)
+        self._consider_preparse_imports(plugin_imports)
+
+    def _consider_preparse_state(
+        self, args: Sequence[str], *, exclude_only: bool = False
+    ) -> list[str]:
+        """Apply the blocking/unblocking of ``-p [no:]plugin`` args in order,
+        without importing plugins, and return the enabled plugin names.
+
+        Applying all of the state before any plugin is imported means the
+        final state of every plugin is known up front, so a plugin that ends
+        up disabled is never imported.
+
+        With ``exclude_only``, apply only the ``no:`` args: used before the
+        default plugins are imported, where a blocked but later re-enabled
+        plugin must not be imported eagerly (the final state is resolved from
+        the full arguments in `Config.parse` before plugins are imported).
+        """
+        plugin_imports: list[str] = []
         i = 0
         n = len(args)
         while i < n:
@@ -823,7 +842,7 @@ class PytestPluginManager(PluginManager):
                     try:
                         parg = args[i]
                     except IndexError:
-                        return
+                        break
                     i += 1
                 elif opt.startswith("-p"):
                     parg = opt[2:]
@@ -832,10 +851,24 @@ class PytestPluginManager(PluginManager):
                 parg = parg.strip()
                 if exclude_only and not parg.startswith("no:"):
                     continue
-                self.consider_pluginarg(parg)
+                self._consider_pluginarg_state(parg)
+                if not parg.startswith("no:"):
+                    plugin_imports.append(parg)
+        return plugin_imports
+
+    def _consider_preparse_imports(self, names: Iterable[str]) -> None:
+        """Import plugins enabled by `_consider_preparse_state`."""
+        for name in names:
+            self.import_plugin(name, consider_entry_points=True)
 
     def consider_pluginarg(self, arg: str) -> None:
         """:meta private:"""
+        self._consider_pluginarg_state(arg)
+        if not arg.startswith("no:"):
+            self.import_plugin(arg, consider_entry_points=True)
+
+    def _consider_pluginarg_state(self, arg: str) -> None:
+        """Apply the blocking/unblocking of a single ``-p [no:]plugin`` arg."""
         if arg.startswith("no:"):
             name = arg[3:]
             if name in essential_plugins:
@@ -861,7 +894,6 @@ class PytestPluginManager(PluginManager):
             self.unblock(name)
             if not name.startswith("pytest_"):
                 self.unblock("pytest_" + name)
-            self.import_plugin(arg, consider_entry_points=True)
 
     def consider_conftest(
         self, conftestmodule: types.ModuleType, registration_name: str

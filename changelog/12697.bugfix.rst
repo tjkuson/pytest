@@ -1,0 +1,1 @@
+``-p no:plugin`` now prevents the plugin from being imported at all when an earlier ``-p plugin`` argument (e.g. in ``addopts``) also enabled it; previously the plugin was imported, executing its module-level code, and then unregistered.

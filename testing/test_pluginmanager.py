@@ -566,3 +566,13 @@ class TestPytestPluginManagerBootstrapping:
         assert pytestpm.has_plugin("abc")
         assert not pytestpm.is_blocked("abc")
         assert not pytestpm.is_blocked("pytest_abc")
+
+    def test_disabled_plugin_is_not_imported(
+        self, pytestpm: PytestPluginManager
+    ) -> None:
+        """A plugin enabled and later disabled in the same args is never
+        imported (importing this nonexistent plugin would raise)."""
+        pytestpm.consider_preparse(["-p", "nonexistent", "-p", "no:nonexistent"])
+
+        assert pytestpm.is_blocked("nonexistent")
+        assert not pytestpm.has_plugin("nonexistent")
